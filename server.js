@@ -1,4 +1,4 @@
-// server.js - Backend Preparado para Produção (Nuvem)
+// server.js - Backend com Cofre Individual de Usuário (Firebase)
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
@@ -7,14 +7,12 @@ const pacotePdf = require('pdf-parse');
 const { OpenAI } = require('openai'); 
 
 const app = express();
-// Configuração de CORS aberta temporariamente para permitir acesso do seu frontend na Vercel
 app.use(cors());
 app.use(express.json());
 
 // ==========================================
 // 1. CONFIGURAÇÃO DE SEGURANÇA (VARIÁVEIS DE AMBIENTE)
 // ==========================================
-// Na nuvem, essas chaves serão injetadas secretamente pelo painel do servidor
 const apiKey = process.env.OPENAI_API_KEY; 
 const mongoURI = process.env.MONGO_URI;
 const PORT = process.env.PORT || 3000;
@@ -42,7 +40,14 @@ const TopicoSchema = new mongoose.Schema({
     revisaoUnidade: String, revisaoInicio: Number, miniTarefas: [MinitarefaSchema] 
 });
 const AreaSchema = new mongoose.Schema({ id: String, nome: String, cor: String, sub: [TopicoSchema] });
-const EditalSchema = new mongoose.Schema({ editalId: { type: String, required: true, unique: true }, nome: String, areas: [AreaSchema] });
+
+// ATENÇÃO: Adicionado o campo userId obrigatório para separar os usuários
+const EditalSchema = new mongoose.Schema({ 
+    userId: { type: String, required: true }, 
+    editalId: { type: String, required: true }, 
+    nome: String, 
+    areas: [AreaSchema] 
+});
 const EditalModel = mongoose.model('Edital', EditalSchema);
 
 const QuestaoSchema = new mongoose.Schema({ disciplina: String, enunciado: String, alternativas: [String], gabarito: String });
@@ -57,22 +62,25 @@ const upload = multer({ storage: multer.memoryStorage() });
 // 5. ROTAS DA API
 // ==========================================
 
-// Rota: Buscar progressos salvos
-app.get('/api/editais', async (req, res) => {
+// Rota: Buscar progressos salvos (AGORA FILTRA PELO USUÁRIO)
+app.get('/api/editais/:userId', async (req, res) => {
     try {
-        const editaisSalvos = await EditalModel.find();
+        const { userId } = req.params;
+        const editaisSalvos = await EditalModel.find({ userId: userId });
         res.json(editaisSalvos);
     } catch (err) {
         res.status(500).json({ erro: "Falha ao buscar progresso no banco." });
     }
 });
 
-// Rota: Salvar progresso
+// Rota: Salvar progresso (AGORA EXIGE O USUÁRIO)
 app.post('/api/editais', async (req, res) => {
     try {
         const dados = req.body;
+        if (!dados.userId) return res.status(400).json({ erro: "Usuário não autenticado." });
+
         const editalAtualizado = await EditalModel.findOneAndUpdate(
-            { editalId: dados.editalId }, 
+            { userId: dados.userId, editalId: dados.editalId }, 
             dados, 
             { returnDocument: 'after', upsert: true } 
         );
@@ -87,8 +95,11 @@ app.post('/api/analisar-pdf', upload.single('arquivoPdf'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ erro: "Nenhum arquivo enviado." });
         
+        // Verifica se o usuário mandou o crachá
+        const userId = req.body.userId;
+        if (!userId) return res.status(400).json({ erro: "Você precisa estar logado para usar a IA." });
+        
         const cargoDesejado = req.body.cargo || "Não especificado";
-        console.log(`📄 Extraindo texto do PDF para o cargo: ${cargoDesejado}...`);
         let textoEdital = "";
 
         if (pacotePdf.PDFParse) {
@@ -120,7 +131,6 @@ app.post('/api/analisar-pdf', upload.single('arquivoPdf'), async (req, res) => {
 
         Você DEVE usar EXATAMENTE a estrutura JSON abaixo para o retorno:
         {
-            "editalId": "gerado_no_backend",
             "nome": "${cargoDesejado} - Estruturado",
             "areas": [
                 {
@@ -163,13 +173,15 @@ app.post('/api/analisar-pdf', upload.single('arquivoPdf'), async (req, res) => {
         const respostaTexto = resposta.choices[0].message.content;
         const editalEstruturadoIA = JSON.parse(respostaTexto);
         
+        // Aplica as credenciais na resposta da IA
+        editalEstruturadoIA.userId = userId;
         editalEstruturadoIA.editalId = 'edital-' + Date.now();
         editalEstruturadoIA.areas.forEach((area, i) => {
             area.id = 'a' + Date.now() + i;
             area.sub.forEach((sub, j) => { sub.id = 's' + Date.now() + i + j; });
         });
 
-        console.log(`✅ Edital estruturado perfeitamente e salvo no BD!`);
+        console.log(`✅ Edital estruturado perfeitamente e salvo no BD para o usuário ${userId}!`);
         const editalSalvo = await EditalModel.create(editalEstruturadoIA);
         res.json(editalSalvo);
 
