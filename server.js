@@ -46,7 +46,7 @@ const EditalSchema = new mongoose.Schema({
 });
 const EditalModel = mongoose.model('Edital', EditalSchema);
 
-// 2.2 NOVO: Modelo de Perfil Global do Usuário
+// 2.2 Modelo de Perfil Global do Usuário
 const UserProfileSchema = new mongoose.Schema({
     userId: { type: String, required: true, unique: true },
     tarefasDoDia: { type: Array, default: [] },
@@ -62,7 +62,7 @@ const UserProfileSchema = new mongoose.Schema({
 const UserProfileModel = mongoose.model('UserProfile', UserProfileSchema);
 
 // ==========================================
-// 3. ROTAS DA API DE PERFIL (NOVAS)
+// 3. ROTAS DA API DE PERFIL
 // ==========================================
 // Rota: Buscar perfil do usuário
 app.get('/api/user-profile/:userId', async (req, res) => {
@@ -107,7 +107,73 @@ app.post('/api/editais', async (req, res) => {
     } catch (err) { res.status(500).json({ erro: "Erro ao salvar edital." }); }
 });
 
+// =======================================================================
+// ROTA OTIMIZADA DE LEITURA DE PDF (IA COM ESTRUTURA RESTRITA E STRICT SCHEMA)
+// =======================================================================
+
+// 1. Schema Estrito para a OpenAI (Strict Structured Outputs)
+const editalJsonSchema = {
+    type: "object",
+    properties: {
+        nome: { 
+            type: "string", 
+            description: "Nome do cargo formatado (Ex: Professor de Geografia - Nível Superior)" 
+        },
+        areas: {
+            type: "array",
+            description: "Lista de disciplinas extraídas",
+            items: {
+                type: "object",
+                properties: {
+                    id: { type: "string" },
+                    nome: { type: "string", description: "Nome exato da disciplina em caixa alta (Ex: LÍNGUA PORTUGUESA)" },
+                    cor: { type: "string" },
+                    sub: {
+                        type: "array",
+                        description: "Lista de tópicos numerados da disciplina",
+                        items: {
+                            type: "object",
+                            properties: {
+                                id: { type: "string" },
+                                nome: { type: "string", description: "Numeração e nome do tópico principal (Ex: 1. Compreensão de textos)" },
+                                concluido: { type: "boolean" },
+                                acertos: { type: "number" },
+                                erros: { type: "number" },
+                                detalhesErros: { type: "array", items: { type: "string" } },
+                                revisaoAtiva: { type: "boolean" },
+                                revisaoTempo: { type: "number" },
+                                revisaoUnidade: { type: "string" },
+                                revisaoInicio: { type: ["number", "null"] },
+                                miniTarefas: { 
+                                    type: "array", 
+                                    items: { 
+                                        type: "object", 
+                                        properties: { 
+                                            id: { type: "string" }, 
+                                            texto: { type: "string" }, 
+                                            concluida: { type: "boolean" } 
+                                        }, 
+                                        required: ["id", "texto", "concluida"], 
+                                        additionalProperties: false 
+                                    } 
+                                }
+                            },
+                            required: ["id", "nome", "concluido", "acertos", "erros", "detalhesErros", "revisaoAtiva", "revisaoTempo", "revisaoUnidade", "revisaoInicio", "miniTarefas"],
+                            additionalProperties: false
+                        }
+                    }
+                },
+                required: ["id", "nome", "cor", "sub"],
+                additionalProperties: false
+            }
+        }
+    },
+    required: ["nome", "areas"],
+    additionalProperties: false
+};
+
 const upload = multer({ storage: multer.memoryStorage() });
+
 app.post('/api/analisar-pdf', upload.single('arquivoPdf'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ erro: "Nenhum arquivo enviado." });
@@ -128,45 +194,84 @@ app.post('/api/analisar-pdf', upload.single('arquivoPdf'), async (req, res) => {
             textoEdital = pdfExtraido.text;
         }
 
+        // Limpeza prévia de ruídos de formatação (essencial para colunas do PDF)
+        textoEdital = textoEdital
+            .replace(/\r\n/g, '\n')
+            .replace(/[ \t]+/g, ' ')
+            .replace(/Página \d+ de \d+/gi, '')
+            .replace(/--+|\.\.+/g, '');
+
+        // Corte Inteligente de Contexto
+        const indiceConteudo = textoEdital.search(/CONTE[UÚ]DO\s+PROGRAM[AÁ]TICO|PROGRAMAS?\s+DE\s+PROVA|ANEXO/i);
+        if (indiceConteudo !== -1) {
+            textoEdital = textoEdital.substring(indiceConteudo, indiceConteudo + 60000);
+        }
+
+        // Prompt Restritivo para a IA seguir o Layout que você montou
         const promptInstrucao = `Abaixo está o texto extraído de um edital de concurso público.
 O usuário deseja estudar EXCLUSIVAMENTE para o cargo de: "${cargoDesejado}".
 Sua tarefa é extrair o CONTEÚDO PROGRAMÁTICO e montar a árvore de estudos seguindo estas 4 REGRAS RÍGIDAS E MATEMÁTICAS:
-1. CONHECIMENTOS COMUNS POR ESCOLARIDADE: Identifique no edital o nível exigido para "${cargoDesejado}". Busque "Conhecimentos Comuns/Gerais" aplicáveis e inclua.
-2. DISCIPLINAS = SESSÕES: Crie "Área" para CADA disciplina. 
-3. TÓPICOS = APENAS NUMERAÇÃO PRINCIPAL (Ex: 1, 2, 3...).
-4. IGNORAR DECIMAIS: PROIBIDO criar tópicos decimais (1.1, 1.2...).
 
-Use EXATAMENTE a estrutura JSON:
-{
-    "nome": "${cargoDesejado} - Estruturado",
-    "areas": [
-        {
-            "id": "a_unico", "nome": "NOME DA DISCIPLINA", "cor": "#0fb9b1",
-            "sub": [ { "id": "s_unico", "nome": "Tópico Principal", "concluido": false, "acertos": 0, "erros": 0, "detalhesErros": [], "revisaoAtiva": false, "revisaoTempo": 0, "revisaoUnidade": "dias", "revisaoInicio": null, "miniTarefas": [] } ]
-        }
-    ]
-}
+1. PROIBIÇÃO DE ÁREAS GENÉRICAS: É EXPRESSAMENTE PROIBIDO criar Áreas/Disciplinas com nomes aglutinadores como "Conhecimentos Gerais", "Conhecimentos Básicos", "Conhecimentos Comuns" ou "Conhecimentos Específicos".
+2. ELEVAÇÃO DE MATÉRIAS A ÁREAS INDEPENDENTES: Cada matéria específica citada no edital DEVE se tornar uma "Área" (Disciplina) independente. Por exemplo, se o edital listar dentro de Conhecimentos Básicos matérias como "Língua Portuguesa", "Administração Pública", "Educação Brasileira: Temas Educacionais e Pedagógicos" ou "Leitura e Interpretação de Dados e Indicadores Educacionais", CADA UMA destas matérias deve ser o título de uma Área própria.
+3. TÓPICOS = APENAS NUMERAÇÃO PRINCIPAL: Dentro de cada Área (Matéria), extraia como tópicos ("sub") apenas os itens com numeração inteira principal (Ex: 1, 2, 3...). Por exemplo, extraia "1. História da educação brasileira: do Movimento dos Pioneiros..." como um tópico isolado.
+4. IGNORAR DECIMAIS E SUBTÓPICOS: PROIBIDO criar tópicos para numerações decimais (1.1, 1.2...). O conteúdo dos decimais deve ser completamente ignorado na criação dos blocos, preservando o layout apenas com os temas principais.
+
+Use EXATAMENTE a estrutura JSON exigida pelo schema para o retorno.
+
 Texto:
 ${textoEdital}`;
 
+        // Chamada da API exigindo o Schema (JSON mode estrito)
         const resposta = await openai.chat.completions.create({
-            model: "gpt-4o-mini", response_format: { type: "json_object" }, 
-            messages: [{ role: "system", content: "Extraia disciplinas em JSON válido." }, { role: "user", content: promptInstrucao }],
+            model: "gpt-4o-mini",
+            response_format: {
+                type: "json_schema",
+                json_schema: {
+                    name: "estrutura_edital",
+                    strict: true,
+                    schema: editalJsonSchema
+                }
+            },
+            messages: [
+                { role: "system", content: "Você é um parser especializado em converter editais desformatados em matrizes de estudo perfeitamente organizadas." },
+                { role: "user", content: promptInstrucao }
+            ],
             temperature: 0.1 
         });
 
         const editalEstruturadoIA = JSON.parse(resposta.choices[0].message.content);
+        const timeNow = Date.now();
+        const coresPadrao = ['#0fb9b1', '#3498db', '#9b59b6', '#e67e22', '#2ecc71', '#1abc9c', '#e74c3c', '#8e44ad'];
+        
         editalEstruturadoIA.userId = userId;
-        editalEstruturadoIA.editalId = 'edital-' + Date.now();
+        editalEstruturadoIA.editalId = 'edital-' + timeNow;
+        
+        // Insere os campos default no objeto montado pela IA
         editalEstruturadoIA.areas.forEach((area, i) => {
-            area.id = 'a' + Date.now() + i;
-            area.sub.forEach((sub, j) => { sub.id = 's' + Date.now() + i + j; });
+            area.id = 'a' + timeNow + i;
+            area.cor = coresPadrao[i % coresPadrao.length];
+            area.sub.forEach((sub, j) => {
+                sub.id = 's' + timeNow + i + j;
+                sub.concluido = false;
+                sub.acertos = 0;
+                sub.erros = 0;
+                sub.detalhesErros = [];
+                sub.revisaoAtiva = false;
+                sub.revisaoTempo = 0;
+                sub.revisaoUnidade = 'dias';
+                sub.revisaoInicio = null;
+                sub.miniTarefas = [];
+            });
         });
 
         const editalSalvo = await EditalModel.create(editalEstruturadoIA);
         res.json(editalSalvo);
 
-    } catch (err) { res.status(500).json({ erro: "Falha na IA." }); }
+    } catch (err) { 
+        console.error("Erro IA PDF:", err);
+        res.status(500).json({ erro: "Falha na IA." }); 
+    }
 });
 
 app.post('/api/gerar-questoes', async (req, res) => {
