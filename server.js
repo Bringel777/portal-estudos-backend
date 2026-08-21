@@ -107,6 +107,17 @@ app.post('/api/editais', async (req, res) => {
     } catch (err) { res.status(500).json({ erro: "Erro ao salvar edital." }); }
 });
 
+// NOVO: Rota para EXCLUIR um edital definitivamente da Nuvem
+app.delete('/api/editais/:userId/:editalId', async (req, res) => {
+    try {
+        const { userId, editalId } = req.params;
+        await EditalModel.findOneAndDelete({ userId: userId, editalId: editalId });
+        res.json({ mensagem: "Edital excluído com sucesso do Banco de Dados!" });
+    } catch (err) {
+        res.status(500).json({ erro: "Erro ao excluir o edital." });
+    }
+});
+
 // =======================================================================
 // ROTA OTIMIZADA DE LEITURA DE PDF (IA COM ESTRUTURA RESTRITA E STRICT SCHEMA)
 // =======================================================================
