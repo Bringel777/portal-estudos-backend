@@ -1,4 +1,4 @@
-// server.js - Backend com Cofre Individual e Perfil Completo
+// server.js - Backend com Cofre Individual, Perfil Completo e Motor de Questões Sênior
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
@@ -8,7 +8,7 @@ const { OpenAI } = require('openai');
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '10mb' })); // Aumentado limite para salvar questões
+app.use(express.json({ limit: '10mb' }));
 
 // ==========================================
 // 1. CONFIGURAÇÃO DE SEGURANÇA
@@ -30,7 +30,6 @@ mongoose.connect(mongoURI)
 // ==========================================
 // 2. SCHEMAS (MODELOS DE DADOS)
 // ==========================================
-// 2.1 Modelo dos Editais
 const MinitarefaSchema = new mongoose.Schema({ id: String, texto: String, concluida: Boolean });
 const TopicoSchema = new mongoose.Schema({ 
     id: String, nome: String, concluido: Boolean, acertos: Number, erros: Number, 
@@ -46,7 +45,7 @@ const EditalSchema = new mongoose.Schema({
 });
 const EditalModel = mongoose.model('Edital', EditalSchema);
 
-// 2.2 Modelo de Perfil Global do Usuário (ATUALIZADO COM O BLOCO DE NOTAS)
+// Modelo de Perfil Global do Usuário (Com suporte ao Bloco de Notas)
 const UserProfileSchema = new mongoose.Schema({
     userId: { type: String, required: true, unique: true },
     tarefasDoDia: { type: Array, default: [] },
@@ -65,7 +64,6 @@ const UserProfileModel = mongoose.model('UserProfile', UserProfileSchema);
 // ==========================================
 // 3. ROTAS DA API DE PERFIL
 // ==========================================
-// Rota: Buscar perfil do usuário
 app.get('/api/user-profile/:userId', async (req, res) => {
     try {
         const profile = await UserProfileModel.findOne({ userId: req.params.userId });
@@ -73,7 +71,6 @@ app.get('/api/user-profile/:userId', async (req, res) => {
     } catch (err) { res.status(500).json({ erro: "Erro ao buscar perfil." }); }
 });
 
-// Rota: Salvar perfil do usuário
 app.post('/api/user-profile', async (req, res) => {
     try {
         if (!req.body.userId) return res.status(400).json({ erro: "Usuário não autenticado." });
@@ -87,7 +84,7 @@ app.post('/api/user-profile', async (req, res) => {
 });
 
 // ==========================================
-// 4. ROTAS DA API DE EDITAIS E EXCLUSÃO
+// 4. ROTAS DA API DE EDITAIS
 // ==========================================
 app.get('/api/editais/:userId', async (req, res) => {
     try {
@@ -119,15 +116,12 @@ app.delete('/api/editais/:userId/:editalId', async (req, res) => {
 });
 
 // =======================================================================
-// 5. ROTA DE LEITURA DE PDF (IA COM ESTRUTURA RESTRITA E STRICT SCHEMA)
+// 5. ROTA OTIMIZADA DE LEITURA DE PDF (IA COM ESTRUTURA RESTRITA)
 // =======================================================================
 const editalJsonSchema = {
     type: "object",
     properties: {
-        nome: { 
-            type: "string", 
-            description: "Nome do cargo formatado (Ex: Professor de Geografia - Nível Superior)" 
-        },
+        nome: { type: "string", description: "Nome do cargo formatado" },
         areas: {
             type: "array",
             description: "Lista de disciplinas extraídas",
@@ -135,7 +129,7 @@ const editalJsonSchema = {
                 type: "object",
                 properties: {
                     id: { type: "string" },
-                    nome: { type: "string", description: "Nome exato da disciplina em caixa alta (Ex: LÍNGUA PORTUGUESA)" },
+                    nome: { type: "string", description: "Nome exato da disciplina em caixa alta" },
                     cor: { type: "string" },
                     sub: {
                         type: "array",
@@ -144,7 +138,7 @@ const editalJsonSchema = {
                             type: "object",
                             properties: {
                                 id: { type: "string" },
-                                nome: { type: "string", description: "Numeração e nome do tópico principal (Ex: 1. Compreensão de textos)" },
+                                nome: { type: "string", description: "Numeração e nome do tópico principal" },
                                 concluido: { type: "boolean" },
                                 acertos: { type: "number" },
                                 erros: { type: "number" },
@@ -204,9 +198,9 @@ O usuário deseja estudar EXCLUSIVAMENTE para o cargo de: "${cargoDesejado}".
 Sua tarefa é extrair o CONTEÚDO PROGRAMÁTICO e montar a árvore de estudos seguindo estas 4 REGRAS RÍGIDAS E MATEMÁTICAS:
 
 1. PROIBIÇÃO DE ÁREAS GENÉRICAS: É EXPRESSAMENTE PROIBIDO criar Áreas/Disciplinas com nomes aglutinadores como "Conhecimentos Gerais", "Conhecimentos Básicos", "Conhecimentos Comuns" ou "Conhecimentos Específicos".
-2. ELEVAÇÃO DE MATÉRIAS A ÁREAS INDEPENDENTES: Cada matéria específica citada no edital DEVE se tornar uma "Área" (Disciplina) independente. Por exemplo, se o edital listar dentro de Conhecimentos Básicos matérias como "Língua Portuguesa", "Administração Pública", "Educação Brasileira: Temas Educacionais e Pedagógicos" ou "Leitura e Interpretação de Dados e Indicadores Educacionais", CADA UMA destas matérias deve ser o título de uma Área própria.
-3. TÓPICOS = APENAS NUMERAÇÃO PRINCIPAL: Dentro de cada Área (Matéria), extraia como tópicos ("sub") apenas os itens com numeração inteira principal (Ex: 1, 2, 3...). Por exemplo, extraia "1. História da educação brasileira: do Movimento dos Pioneiros..." como um tópico isolado.
-4. IGNORAR DECIMAIS E SUBTÓPICOS: PROIBIDO criar tópicos para numerações decimais (1.1, 1.2...). O conteúdo dos decimais deve ser completamente ignorado na criação dos blocos, preservando o layout apenas com os temas principais.
+2. ELEVAÇÃO DE MATÉRIAS A ÁREAS INDEPENDENTES: Cada matéria específica citada no edital DEVE se tornar uma "Área" (Disciplina) independente. Por exemplo, se o edital listar dentro de Conhecimentos Básicos matérias como "Língua Portuguesa", "Administração Pública", "Educação Brasileira", CADA UMA destas matérias deve ser o título de uma Área própria.
+3. TÓPICOS = APENAS NUMERAÇÃO PRINCIPAL: Dentro de cada Área (Matéria), extraia como tópicos ("sub") apenas os itens com numeração inteira principal (Ex: 1, 2, 3...).
+4. IGNORAR DECIMAIS E SUBTÓPICOS: PROIBIDO criar tópicos para numerações decimais (1.1, 1.2...). Preserve o layout apenas com os temas principais.
 
 Use EXATAMENTE a estrutura JSON exigida pelo schema para o retorno.
 
@@ -246,7 +240,7 @@ ${textoEdital}`;
 });
 
 // =======================================================================
-// 6. MOTOR SÊNIOR DE GERAÇÃO DE QUESTÕES
+// 6. MOTOR SÊNIOR DE GERAÇÃO DE QUESTÕES (ALTA PERFORMANCE)
 // =======================================================================
 app.post('/api/gerar-questoes', async (req, res) => {
     try {
@@ -256,13 +250,13 @@ app.post('/api/gerar-questoes', async (req, res) => {
 Sua missão é criar ${quantidade} questões INÉDITAS, complexas e de altíssimo nível sobre o tópico: "${topico}" (Disciplina: "${disciplina}").
 
 REGRAS RÍGIDAS DE ELABORAÇÃO:
-1. CONTEXTUALIZAÇÃO OBRIGATÓRIA: Toda questão DEVE ter um texto-base, situação-problema, estudo de caso ou fragmento de literatura consolidada, verdadeira e bem selecionada. NUNCA faça perguntas diretas ou "cruas" sem contexto.
-2. TIPOLOGIA VARIADA: Alterne de forma randômica entre 3 formatos:
-   - Múltipla escolha interpretativa com base no texto.
-   - Julgamento de Itens (I, II, III, IV): Liste afirmações e as alternativas devem indicar apenas as corretas ou erradas (Ex: A) I, II e IV).
-   - Verdadeiro ou Falso (V/F): Liste afirmações para julgamento e as alternativas devem representar a sequência respectiva (Ex: A) V, V, F, V).
-3. PADRONIZAÇÃO DE TAMANHO E GABARITO: As 5 alternativas (A, B, C, D, E) DEVEM ter um tamanho textual padronizado e muito semelhante. A alternativa correta NUNCA deve se destacar por ser visivelmente mais longa ou mais curta. GARANTA a máxima variabilidade na letra do gabarito correto entre as questões geradas na mesma requisição.
-4. JUSTIFICATIVAS INDIVIDUAIS E EXATAS: Para CADA alternativa (A, B, C, D, E), forneça uma explicação profunda, estruturada e baseada na literatura técnica. Explique exatamente o erro sutil ou o acerto de cada letra, ajudando a entender o conceito e não dando apenas respostas genéricas.
+1. CONTEXTUALIZAÇÃO OBRIGATÓRIA: Toda questão DEVE ter um texto-base, situação-problema, estudo de caso ou fragmento de literatura consolidada e verdadeira. NUNCA faça perguntas diretas ou "cruas" sem contexto.
+2. DIVERSIFICAÇÃO OBRIGATÓRIA DE FORMATOS: É estritamente PROIBIDO gerar todas as questões no mesmo formato. Você DEVE distribuir as ${quantidade} questões de forma EQUILIBRADA entre os 3 formatos abaixo:
+   - TIPO 1 (Múltipla escolha interpretativa): Pergunta direta baseada no texto/caso.
+   - TIPO 2 (Julgamento de Itens I, II, III, IV): Liste afirmações. As alternativas devem ser combinações (Ex: A) Somente I e II estão corretas).
+   - TIPO 3 (Verdadeiro ou Falso): Liste afirmações para julgamento. As alternativas devem representar a sequência exata (Ex: A) V, V, F, V).
+3. PADRONIZAÇÃO DE TAMANHO E GABARITO: As 5 alternativas (A, B, C, D, E) DEVEM ter um tamanho textual semelhante. A alternativa correta NUNCA deve ser a mais longa nem a mais curta. DIVERSIFIQUE ao máximo a letra do gabarito correto entre as questões geradas (evite sequências repetidas).
+4. JUSTIFICATIVAS INDIVIDUAIS E EXATAS: Para CADA alternativa (A, B, C, D, E), forneça uma explicação profunda e baseada na literatura técnica. Explique linha por linha o erro sutil ou o acerto daquela alternativa específica, não fornecendo explicações genéricas.
 
 O formato de saída DEVE ser ESTRITAMENTE o objeto JSON abaixo:
 {
@@ -279,11 +273,11 @@ O formato de saída DEVE ser ESTRITAMENTE o objeto JSON abaixo:
             ],
             "gabarito": "C",
             "justificativas": {
-                "A": "Explicação técnica profunda do erro/acerto.",
-                "B": "Explicação técnica profunda do erro/acerto.",
-                "C": "Explicação técnica profunda do erro/acerto.",
-                "D": "Explicação técnica profunda do erro/acerto.",
-                "E": "Explicação técnica profunda do erro/acerto."
+                "A": "Explicação técnica profunda do motivo do erro/acerto.",
+                "B": "Explicação técnica profunda do motivo do erro/acerto.",
+                "C": "Explicação técnica profunda do motivo do erro/acerto.",
+                "D": "Explicação técnica profunda do motivo do erro/acerto.",
+                "E": "Explicação técnica profunda do motivo do erro/acerto."
             }
         }
     ]
@@ -293,10 +287,10 @@ O formato de saída DEVE ser ESTRITAMENTE o objeto JSON abaixo:
             model: "gpt-4o-mini", 
             response_format: { type: "json_object" },
             messages: [
-                { role: "system", content: "Você é um gerador de questões de alto nível. Responda exclusivamente com um JSON válido seguindo a estrutura solicitada." }, 
+                { role: "system", content: "Examinador Sênior de concursos de alto nível. Você responde exclusivamente no formato JSON solicitado, com explicações individuais." }, 
                 { role: "user", content: promptInstrucao }
             ], 
-            temperature: 0.4 // Temperatura otimizada para permitir variabilidade nos textos e gabaritos
+            temperature: 0.4 // Temperatura ajustada para garantir a variabilidade de tipos (V/F, I, II, III) e criatividade
         });
         
         res.json(JSON.parse(resposta.choices[0].message.content));
@@ -307,7 +301,7 @@ O formato de saída DEVE ser ESTRITAMENTE o objeto JSON abaixo:
 });
 
 // =======================================================================
-// 7. ROTA DE SIMULAÇÃO DE RANKING (Mock)
+// 7. ROTA DE SIMULAÇÃO DE RANKING
 // =======================================================================
 const bancoDeConcursos = [ { palavrasChave: ['geografia', 'petrolina', 'professor', 'seduc'], dados: { id: 'concurso-pe-geo', nome: "Prefeitura de Petrolina - Professor de Geografia", pesoGerais: 1, pesoEspecif: 2, totalVagas: 15, notaCorteHist: 85, notaPrimeiroHist: 110 } } ];
 app.get('/api/buscar-concurso', (req, res) => {
