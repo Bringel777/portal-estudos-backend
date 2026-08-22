@@ -107,7 +107,6 @@ app.post('/api/editais', async (req, res) => {
     } catch (err) { res.status(500).json({ erro: "Erro ao salvar edital." }); }
 });
 
-// NOVO: Rota para EXCLUIR um edital definitivamente da Nuvem
 app.delete('/api/editais/:userId/:editalId', async (req, res) => {
     try {
         const { userId, editalId } = req.params;
@@ -118,18 +117,11 @@ app.delete('/api/editais/:userId/:editalId', async (req, res) => {
     }
 });
 
-// =======================================================================
 // ROTA OTIMIZADA DE LEITURA DE PDF (IA COM ESTRUTURA RESTRITA E STRICT SCHEMA)
-// =======================================================================
-
-// 1. Schema Estrito para a OpenAI (Strict Structured Outputs)
 const editalJsonSchema = {
     type: "object",
     properties: {
-        nome: { 
-            type: "string", 
-            description: "Nome do cargo formatado (Ex: Professor de Geografia - Nível Superior)" 
-        },
+        nome: { type: "string", description: "Nome do cargo formatado (Ex: Professor de Geografia - Nível Superior)" },
         areas: {
             type: "array",
             description: "Lista de disciplinas extraídas",
@@ -157,16 +149,7 @@ const editalJsonSchema = {
                                 revisaoInicio: { type: ["number", "null"] },
                                 miniTarefas: { 
                                     type: "array", 
-                                    items: { 
-                                        type: "object", 
-                                        properties: { 
-                                            id: { type: "string" }, 
-                                            texto: { type: "string" }, 
-                                            concluida: { type: "boolean" } 
-                                        }, 
-                                        required: ["id", "texto", "concluida"], 
-                                        additionalProperties: false 
-                                    } 
+                                    items: { type: "object", properties: { id: { type: "string" }, texto: { type: "string" }, concluida: { type: "boolean" } }, required: ["id", "texto", "concluida"], additionalProperties: false } 
                                 }
                             },
                             required: ["id", "nome", "concluido", "acertos", "erros", "detalhesErros", "revisaoAtiva", "revisaoTempo", "revisaoUnidade", "revisaoInicio", "miniTarefas"],
@@ -205,20 +188,11 @@ app.post('/api/analisar-pdf', upload.single('arquivoPdf'), async (req, res) => {
             textoEdital = pdfExtraido.text;
         }
 
-        // Limpeza prévia de ruídos de formatação (essencial para colunas do PDF)
-        textoEdital = textoEdital
-            .replace(/\r\n/g, '\n')
-            .replace(/[ \t]+/g, ' ')
-            .replace(/Página \d+ de \d+/gi, '')
-            .replace(/--+|\.\.+/g, '');
+        textoEdital = textoEdital.replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ').replace(/Página \d+ de \d+/gi, '').replace(/--+|\.\.+/g, '');
 
-        // Corte Inteligente de Contexto
         const indiceConteudo = textoEdital.search(/CONTE[UÚ]DO\s+PROGRAM[AÁ]TICO|PROGRAMAS?\s+DE\s+PROVA|ANEXO/i);
-        if (indiceConteudo !== -1) {
-            textoEdital = textoEdital.substring(indiceConteudo, indiceConteudo + 60000);
-        }
+        if (indiceConteudo !== -1) { textoEdital = textoEdital.substring(indiceConteudo, indiceConteudo + 60000); }
 
-        // Prompt Restritivo para a IA seguir o Layout que você montou
         const promptInstrucao = `Abaixo está o texto extraído de um edital de concurso público.
 O usuário deseja estudar EXCLUSIVAMENTE para o cargo de: "${cargoDesejado}".
 Sua tarefa é extrair o CONTEÚDO PROGRAMÁTICO e montar a árvore de estudos seguindo estas 4 REGRAS RÍGIDAS E MATEMÁTICAS:
@@ -233,21 +207,10 @@ Use EXATAMENTE a estrutura JSON exigida pelo schema para o retorno.
 Texto:
 ${textoEdital}`;
 
-        // Chamada da API exigindo o Schema (JSON mode estrito)
         const resposta = await openai.chat.completions.create({
             model: "gpt-4o-mini",
-            response_format: {
-                type: "json_schema",
-                json_schema: {
-                    name: "estrutura_edital",
-                    strict: true,
-                    schema: editalJsonSchema
-                }
-            },
-            messages: [
-                { role: "system", content: "Você é um parser especializado em converter editais desformatados em matrizes de estudo perfeitamente organizadas." },
-                { role: "user", content: promptInstrucao }
-            ],
+            response_format: { type: "json_schema", json_schema: { name: "estrutura_edital", strict: true, schema: editalJsonSchema } },
+            messages: [{ role: "system", content: "Você é um parser especializado em converter editais desformatados em matrizes de estudo perfeitamente organizadas." }, { role: "user", content: promptInstrucao }],
             temperature: 0.1 
         });
 
@@ -258,21 +221,12 @@ ${textoEdital}`;
         editalEstruturadoIA.userId = userId;
         editalEstruturadoIA.editalId = 'edital-' + timeNow;
         
-        // Insere os campos default no objeto montado pela IA
         editalEstruturadoIA.areas.forEach((area, i) => {
             area.id = 'a' + timeNow + i;
             area.cor = coresPadrao[i % coresPadrao.length];
             area.sub.forEach((sub, j) => {
                 sub.id = 's' + timeNow + i + j;
-                sub.concluido = false;
-                sub.acertos = 0;
-                sub.erros = 0;
-                sub.detalhesErros = [];
-                sub.revisaoAtiva = false;
-                sub.revisaoTempo = 0;
-                sub.revisaoUnidade = 'dias';
-                sub.revisaoInicio = null;
-                sub.miniTarefas = [];
+                sub.concluido = false; sub.acertos = 0; sub.erros = 0; sub.detalhesErros = []; sub.revisaoAtiva = false; sub.revisaoTempo = 0; sub.revisaoUnidade = 'dias'; sub.revisaoInicio = null; sub.miniTarefas = [];
             });
         });
 
@@ -285,17 +239,58 @@ ${textoEdital}`;
     }
 });
 
+// NOVA ROTA OTIMIZADA DE GERAÇÃO DE QUESTÕES (ALTA PERFORMANCE)
 app.post('/api/gerar-questoes', async (req, res) => {
     try {
         const { topico, disciplina, quantidade } = req.body;
-        const promptInstrucao = `Crie ${quantidade} questões INÉDITAS de múltipla escolha sobre o tópico: "${topico}" (Disciplina: "${disciplina}").
-Nível ALTO. 5 alternativas (A, B, C, D, E). Apenas UMA correta.
-JSON EXATO: { "questoes": [ { "id": "uuid", "enunciado": "Texto", "alternativas": ["A) ", "B) ", "C) ", "D) ", "E) "], "gabarito": "A", "justificativa": "Explicação" } ] }`;
+        
+        const promptInstrucao = `Você é um elaborador de provas SÊNIOR das bancas mais rigorosas do Brasil (FGV, Cebraspe, FCC, Vunesp).
+Sua missão é criar ${quantidade} questões INÉDITAS, complexas e de ALTO NÍVEL sobre o tópico: "${topico}" (Disciplina: "${disciplina}").
+
+REGRAS EXTREMAS DE ELABORAÇÃO:
+1. CONTEXTUALIZAÇÃO: Toda questão DEVE ter um texto-base, situação-problema, estudo de caso ou fragmento de literatura consolidada. NUNCA faça perguntas diretas e "cruas".
+2. TIPOLOGIA VARIADA: Alterne de forma randômica entre os seguintes formatos:
+   - Múltipla escolha tradicional com base em um texto/caso.
+   - Julgamento de Itens (I, II, III, IV) onde as alternativas pedem "Estão corretas: a) I e II, b) I, III e IV...", etc.
+   - Verdadeiro ou Falso (V ou F) para um grupo de afirmativas, onde as alternativas trazem a sequência (ex: a) V, F, V, V).
+3. EQUILÍBRIO E GABARITO: As 5 alternativas (A, B, C, D, E) devem ter tamanhos textuais rigorosamente semelhantes. A alternativa correta NÃO deve ser a mais longa. GARANTA a aleatoriedade da letra correta em cada questão.
+4. JUSTIFICATIVAS INDIVIDUAIS: Para CADA alternativa (A, B, C, D, E), você deve fornecer uma explicação robusta, referenciando literatura verdadeira e conceitos aprofundados, explicando exatamente o porquê está certa ou errada.
+
+O formato de saída DEVE ser ESTRITAMENTE o JSON abaixo:
+{
+    "questoes": [
+        {
+            "id": "uuid_gerado_por_voce",
+            "enunciado": "Texto base contextualizado + Comando da questão...",
+            "alternativas": [
+                "A) Texto da alternativa...",
+                "B) Texto da alternativa...",
+                "C) Texto da alternativa...",
+                "D) Texto da alternativa...",
+                "E) Texto da alternativa..."
+            ],
+            "gabarito": "A",
+            "justificativas": {
+                "A": "Explicação técnica do motivo desta alternativa ser a correta/errada.",
+                "B": "Explicação técnica do motivo desta alternativa ser a correta/errada.",
+                "C": "Explicação técnica do motivo desta alternativa ser a correta/errada.",
+                "D": "Explicação técnica do motivo desta alternativa ser a correta/errada.",
+                "E": "Explicação técnica do motivo desta alternativa ser a correta/errada."
+            }
+        }
+    ]
+}`;
 
         const resposta = await openai.chat.completions.create({
-            model: "gpt-4o-mini", response_format: { type: "json_object" },
-            messages: [{ role: "system", content: "Examinador de concursos. Responda JSON." }, { role: "user", content: promptInstrucao }], temperature: 0.2
+            model: "gpt-4o-mini", 
+            response_format: { type: "json_object" },
+            messages: [
+                { role: "system", content: "Examinador Sênior de concursos de alto nível. Você responde exclusivamente no formato JSON solicitado, com explicações individuais." }, 
+                { role: "user", content: promptInstrucao }
+            ], 
+            temperature: 0.4 // Temperatura ligeiramente aumentada (0.4) para permitir criatividade nos textos/contextos e variabilidade nas letras
         });
+        
         res.json(JSON.parse(resposta.choices[0].message.content));
     } catch (err) { res.status(500).json({ erro: "Falha IA Questões." }); }
 });
