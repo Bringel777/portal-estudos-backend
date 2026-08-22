@@ -46,7 +46,7 @@ const EditalSchema = new mongoose.Schema({
 });
 const EditalModel = mongoose.model('Edital', EditalSchema);
 
-// 2.2 Modelo de Perfil Global do Usuário
+// 2.2 Modelo de Perfil Global do Usuário (ATUALIZADO COM O BLOCO DE NOTAS)
 const UserProfileSchema = new mongoose.Schema({
     userId: { type: String, required: true, unique: true },
     tarefasDoDia: { type: Array, default: [] },
@@ -57,7 +57,8 @@ const UserProfileSchema = new mongoose.Schema({
     mostrarGraficoTempo: { type: Boolean, default: true },
     modoEscuro: { type: Boolean, default: false },
     syncAtivo: { type: Boolean, default: false },
-    bancoQuestoes: { type: Object, default: {} }
+    bancoQuestoes: { type: Object, default: {} },
+    minhasNotas: { type: Object, default: {} } // Armazena as anotações do Modo Foco
 }, { strict: false });
 const UserProfileModel = mongoose.model('UserProfile', UserProfileSchema);
 
@@ -86,7 +87,7 @@ app.post('/api/user-profile', async (req, res) => {
 });
 
 // ==========================================
-// 4. ROTAS DA API DE EDITAIS E IA
+// 4. ROTAS DA API DE EDITAIS E EXCLUSÃO
 // ==========================================
 app.get('/api/editais/:userId', async (req, res) => {
     try {
@@ -107,7 +108,6 @@ app.post('/api/editais', async (req, res) => {
     } catch (err) { res.status(500).json({ erro: "Erro ao salvar edital." }); }
 });
 
-// NOVO: Rota para EXCLUIR um edital definitivamente da Nuvem
 app.delete('/api/editais/:userId/:editalId', async (req, res) => {
     try {
         const { userId, editalId } = req.params;
@@ -119,10 +119,8 @@ app.delete('/api/editais/:userId/:editalId', async (req, res) => {
 });
 
 // =======================================================================
-// ROTA OTIMIZADA DE LEITURA DE PDF (IA COM ESTRUTURA RESTRITA E STRICT SCHEMA)
+// 5. ROTA DE LEITURA DE PDF (IA COM ESTRUTURA RESTRITA E STRICT SCHEMA)
 // =======================================================================
-
-// 1. Schema Estrito para a OpenAI (Strict Structured Outputs)
 const editalJsonSchema = {
     type: "object",
     properties: {
@@ -157,16 +155,7 @@ const editalJsonSchema = {
                                 revisaoInicio: { type: ["number", "null"] },
                                 miniTarefas: { 
                                     type: "array", 
-                                    items: { 
-                                        type: "object", 
-                                        properties: { 
-                                            id: { type: "string" }, 
-                                            texto: { type: "string" }, 
-                                            concluida: { type: "boolean" } 
-                                        }, 
-                                        required: ["id", "texto", "concluida"], 
-                                        additionalProperties: false 
-                                    } 
+                                    items: { type: "object", properties: { id: { type: "string" }, texto: { type: "string" }, concluida: { type: "boolean" } }, required: ["id", "texto", "concluida"], additionalProperties: false } 
                                 }
                             },
                             required: ["id", "nome", "concluido", "acertos", "erros", "detalhesErros", "revisaoAtiva", "revisaoTempo", "revisaoUnidade", "revisaoInicio", "miniTarefas"],
@@ -205,20 +194,11 @@ app.post('/api/analisar-pdf', upload.single('arquivoPdf'), async (req, res) => {
             textoEdital = pdfExtraido.text;
         }
 
-        // Limpeza prévia de ruídos de formatação (essencial para colunas do PDF)
-        textoEdital = textoEdital
-            .replace(/\r\n/g, '\n')
-            .replace(/[ \t]+/g, ' ')
-            .replace(/Página \d+ de \d+/gi, '')
-            .replace(/--+|\.\.+/g, '');
+        textoEdital = textoEdital.replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ').replace(/Página \d+ de \d+/gi, '').replace(/--+|\.\.+/g, '');
 
-        // Corte Inteligente de Contexto
         const indiceConteudo = textoEdital.search(/CONTE[UÚ]DO\s+PROGRAM[AÁ]TICO|PROGRAMAS?\s+DE\s+PROVA|ANEXO/i);
-        if (indiceConteudo !== -1) {
-            textoEdital = textoEdital.substring(indiceConteudo, indiceConteudo + 60000);
-        }
+        if (indiceConteudo !== -1) { textoEdital = textoEdital.substring(indiceConteudo, indiceConteudo + 60000); }
 
-        // Prompt Restritivo para a IA seguir o Layout que você montou
         const promptInstrucao = `Abaixo está o texto extraído de um edital de concurso público.
 O usuário deseja estudar EXCLUSIVAMENTE para o cargo de: "${cargoDesejado}".
 Sua tarefa é extrair o CONTEÚDO PROGRAMÁTICO e montar a árvore de estudos seguindo estas 4 REGRAS RÍGIDAS E MATEMÁTICAS:
@@ -233,21 +213,10 @@ Use EXATAMENTE a estrutura JSON exigida pelo schema para o retorno.
 Texto:
 ${textoEdital}`;
 
-        // Chamada da API exigindo o Schema (JSON mode estrito)
         const resposta = await openai.chat.completions.create({
             model: "gpt-4o-mini",
-            response_format: {
-                type: "json_schema",
-                json_schema: {
-                    name: "estrutura_edital",
-                    strict: true,
-                    schema: editalJsonSchema
-                }
-            },
-            messages: [
-                { role: "system", content: "Você é um parser especializado em converter editais desformatados em matrizes de estudo perfeitamente organizadas." },
-                { role: "user", content: promptInstrucao }
-            ],
+            response_format: { type: "json_schema", json_schema: { name: "estrutura_edital", strict: true, schema: editalJsonSchema } },
+            messages: [{ role: "system", content: "Você é um parser especializado em converter editais desformatados em matrizes de estudo perfeitamente organizadas." }, { role: "user", content: promptInstrucao }],
             temperature: 0.1 
         });
 
@@ -258,21 +227,12 @@ ${textoEdital}`;
         editalEstruturadoIA.userId = userId;
         editalEstruturadoIA.editalId = 'edital-' + timeNow;
         
-        // Insere os campos default no objeto montado pela IA
         editalEstruturadoIA.areas.forEach((area, i) => {
             area.id = 'a' + timeNow + i;
             area.cor = coresPadrao[i % coresPadrao.length];
             area.sub.forEach((sub, j) => {
                 sub.id = 's' + timeNow + i + j;
-                sub.concluido = false;
-                sub.acertos = 0;
-                sub.erros = 0;
-                sub.detalhesErros = [];
-                sub.revisaoAtiva = false;
-                sub.revisaoTempo = 0;
-                sub.revisaoUnidade = 'dias';
-                sub.revisaoInicio = null;
-                sub.miniTarefas = [];
+                sub.concluido = false; sub.acertos = 0; sub.erros = 0; sub.detalhesErros = []; sub.revisaoAtiva = false; sub.revisaoTempo = 0; sub.revisaoUnidade = 'dias'; sub.revisaoInicio = null; sub.miniTarefas = [];
             });
         });
 
@@ -285,21 +245,70 @@ ${textoEdital}`;
     }
 });
 
+// =======================================================================
+// 6. MOTOR SÊNIOR DE GERAÇÃO DE QUESTÕES
+// =======================================================================
 app.post('/api/gerar-questoes', async (req, res) => {
     try {
         const { topico, disciplina, quantidade } = req.body;
-        const promptInstrucao = `Crie ${quantidade} questões INÉDITAS de múltipla escolha sobre o tópico: "${topico}" (Disciplina: "${disciplina}").
-Nível ALTO. 5 alternativas (A, B, C, D, E). Apenas UMA correta.
-JSON EXATO: { "questoes": [ { "id": "uuid", "enunciado": "Texto", "alternativas": ["A) ", "B) ", "C) ", "D) ", "E) "], "gabarito": "A", "justificativa": "Explicação" } ] }`;
+        
+        const promptInstrucao = `Atue como um Examinador Sênior das principais bancas de concurso do Brasil (FGV, Cebraspe, FCC, Vunesp).
+Sua missão é criar ${quantidade} questões INÉDITAS, complexas e de altíssimo nível sobre o tópico: "${topico}" (Disciplina: "${disciplina}").
+
+REGRAS RÍGIDAS DE ELABORAÇÃO:
+1. CONTEXTUALIZAÇÃO OBRIGATÓRIA: Toda questão DEVE ter um texto-base, situação-problema, estudo de caso ou fragmento de literatura consolidada, verdadeira e bem selecionada. NUNCA faça perguntas diretas ou "cruas" sem contexto.
+2. TIPOLOGIA VARIADA: Alterne de forma randômica entre 3 formatos:
+   - Múltipla escolha interpretativa com base no texto.
+   - Julgamento de Itens (I, II, III, IV): Liste afirmações e as alternativas devem indicar apenas as corretas ou erradas (Ex: A) I, II e IV).
+   - Verdadeiro ou Falso (V/F): Liste afirmações para julgamento e as alternativas devem representar a sequência respectiva (Ex: A) V, V, F, V).
+3. PADRONIZAÇÃO DE TAMANHO E GABARITO: As 5 alternativas (A, B, C, D, E) DEVEM ter um tamanho textual padronizado e muito semelhante. A alternativa correta NUNCA deve se destacar por ser visivelmente mais longa ou mais curta. GARANTA a máxima variabilidade na letra do gabarito correto entre as questões geradas na mesma requisição.
+4. JUSTIFICATIVAS INDIVIDUAIS E EXATAS: Para CADA alternativa (A, B, C, D, E), forneça uma explicação profunda, estruturada e baseada na literatura técnica. Explique exatamente o erro sutil ou o acerto de cada letra, ajudando a entender o conceito e não dando apenas respostas genéricas.
+
+O formato de saída DEVE ser ESTRITAMENTE o objeto JSON abaixo:
+{
+    "questoes": [
+        {
+            "id": "uuid_gerado_por_voce",
+            "enunciado": "Texto base contextualizado + Afirmações (se for o caso) + Comando final da questão...",
+            "alternativas": [
+                "A) Texto da alternativa...",
+                "B) Texto da alternativa...",
+                "C) Texto da alternativa...",
+                "D) Texto da alternativa...",
+                "E) Texto da alternativa..."
+            ],
+            "gabarito": "C",
+            "justificativas": {
+                "A": "Explicação técnica profunda do erro/acerto.",
+                "B": "Explicação técnica profunda do erro/acerto.",
+                "C": "Explicação técnica profunda do erro/acerto.",
+                "D": "Explicação técnica profunda do erro/acerto.",
+                "E": "Explicação técnica profunda do erro/acerto."
+            }
+        }
+    ]
+}`;
 
         const resposta = await openai.chat.completions.create({
-            model: "gpt-4o-mini", response_format: { type: "json_object" },
-            messages: [{ role: "system", content: "Examinador de concursos. Responda JSON." }, { role: "user", content: promptInstrucao }], temperature: 0.2
+            model: "gpt-4o-mini", 
+            response_format: { type: "json_object" },
+            messages: [
+                { role: "system", content: "Você é um gerador de questões de alto nível. Responda exclusivamente com um JSON válido seguindo a estrutura solicitada." }, 
+                { role: "user", content: promptInstrucao }
+            ], 
+            temperature: 0.4 // Temperatura otimizada para permitir variabilidade nos textos e gabaritos
         });
+        
         res.json(JSON.parse(resposta.choices[0].message.content));
-    } catch (err) { res.status(500).json({ erro: "Falha IA Questões." }); }
+    } catch (err) { 
+        console.error("Falha ao gerar questões:", err);
+        res.status(500).json({ erro: "Falha IA Questões." }); 
+    }
 });
 
+// =======================================================================
+// 7. ROTA DE SIMULAÇÃO DE RANKING (Mock)
+// =======================================================================
 const bancoDeConcursos = [ { palavrasChave: ['geografia', 'petrolina', 'professor', 'seduc'], dados: { id: 'concurso-pe-geo', nome: "Prefeitura de Petrolina - Professor de Geografia", pesoGerais: 1, pesoEspecif: 2, totalVagas: 15, notaCorteHist: 85, notaPrimeiroHist: 110 } } ];
 app.get('/api/buscar-concurso', (req, res) => {
     const termo = req.query.q; if (!termo) return res.status(400).json({ erro: "Envie termo." });
